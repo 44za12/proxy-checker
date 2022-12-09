@@ -30,7 +30,7 @@ func (pc *ProxyChecker) CheckProxy(proxy string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://bing.com", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://google.com", nil)
 	if err != nil {
 		return false
 	}
@@ -40,10 +40,7 @@ func (pc *ProxyChecker) CheckProxy(proxy string) bool {
 	}
 	defer resp.Body.Close()
 	elapsed := time.Since(start)
-	if elapsed.Seconds() > 8 {
-		return false
-	}
-	return true
+	return elapsed.Seconds() <= 8
 }
 
 // ProcessFile reads the input file line by line and checks the latency of each proxy
