@@ -1,5 +1,3 @@
-Alright, let's modify the README to reflect the updated function behavior.
-
 ---
 
 # Proxy Checker
