@@ -25,7 +25,7 @@ import "github.com/44za12/proxy-checker"
 To fetch a valid SOCKS5 proxy:
 
 ```go
-proxy := proxychecker.GetValidProxy()
+proxy := proxychecker.GetGoodProxy()
 if proxy == "" {
     fmt.Println("Failed to fetch a valid proxy.")
     return
@@ -35,9 +35,9 @@ fmt.Println("Fetched Proxy:", proxy)
 
 ## How It Works
 
-Upon the first call to `GetValidProxy`:
+Upon the first call to `GetGoodProxy`:
 
-- The tool will scrape SOCKS5 proxies from predefined sources.
+- The tool will scrape proxies from predefined sources.
 - Validate each proxy for performance and reliability.
 - Store valid proxies in an in-memory cache for quick retrieval in subsequent calls.
 
