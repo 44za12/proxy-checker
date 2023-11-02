@@ -1,80 +1,58 @@
-package main
+package proxychecker
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"sync"
 	"time"
 )
 
-// ProxyChecker is a struct that holds the input and output file paths
-type ProxyChecker struct {
-	InputFile  string
-	OutputFile string
+var testUrls = []string{
+	"http://ifconfig.me",
+	"http://httpbin.org/ip",
+	"https://api.myip.com",
+	"http://checkip.amazonaws.com",
+	"https://www.cloudflare.com/cdn-cgi/trace",
+	"https://checkip.dyndns.org",
+	"http://icanhazip.com",
+	"http://www.trackip.net/ip",
+	"https://ipinfo.io/ip",
 }
 
+var cache = make([]string, 0)
+var cacheMutex sync.Mutex
+
 // CheckProxy checks the latency of a proxy and returns true if it is below the threshold
-func (pc *ProxyChecker) CheckProxy(proxy string) bool {
+func CheckProxy(proxy string) bool {
 	start := time.Now()
-	proxyURL, _ := url.Parse(proxy)
+	proxyURL, _ := url.Parse("socks5://" + proxy)
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://google.com", nil)
-	if err != nil {
-		return false
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	elapsed := time.Since(start)
-	return elapsed.Seconds() <= 8
-}
 
-// ProcessFile reads the input file line by line and checks the latency of each proxy
-// It then writes the good proxies to the output file
-func (pc *ProxyChecker) ProcessFile() {
-	file, err := os.Open(pc.InputFile)
-	if err != nil {
-		fmt.Println(err)
-		return
+	for _, testUrl := range testUrls {
+		req, err := http.NewRequestWithContext(ctx, "GET", testUrl, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			continue
+		}
+		defer resp.Body.Close()
+		elapsed := time.Since(start)
+		if elapsed.Seconds() <= 60 {
+			return true
+		}
 	}
-	defer file.Close()
-
-	outFile, err := os.Create(pc.OutputFile)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer outFile.Close()
-
-	scanner := bufio.NewScanner(file)
-	var wg sync.WaitGroup
-	for scanner.Scan() {
-		wg.Add(1)
-		go func(proxy string) {
-			defer wg.Done()
-			if pc.CheckProxy(proxy) {
-				_, err := outFile.WriteString(proxy + "\n")
-				if err != nil {
-					fmt.Println(err)
-				}
-			}
-		}(scanner.Text())
-	}
-	wg.Wait()
+	return false
 }
 
 func scrapeProxies(url string) []string {
@@ -91,29 +69,11 @@ func scrapeProxies(url string) []string {
 	return pattern.FindAllString(string(html), -1)
 }
 
-func main() {
-	if len(os.Args) != 3 {
-		fmt.Println("Usage: proxychecker <file_to_put_all_scraped_proxies_to> <output_file_of_good_proxies>")
-		return
-	}
-
-	inputFile := os.Args[1]
-	outputFile := os.Args[2]
-
-	// List of URLs to scrape proxies from
+func FetchAndStoreGoodProxies() {
 	urls := []string{
-		"https://www.sslproxies.org/",
-		"https://free-proxy-list.net/",
-		"https://www.us-proxy.org/",
-		"https://www.socks-proxy.net/",
-		"https://raw.githubusercontent.com/saschazesiger/Free-Proxies/master/proxies/all.txt",
-		"https://raw.githubusercontent.com/andigwandi/free-proxy/main/proxy_list.txt",
 		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
-		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
-		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-		"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/proxy.txt",
-		"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt",
 		"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
+		"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5.txt",
 	}
 
 	var wg sync.WaitGroup
@@ -124,45 +84,35 @@ func main() {
 		go func(url string) {
 			defer wg.Done()
 			for _, proxy := range scrapeProxies(url) {
-				proxies[proxy] = true
+				if CheckProxy(proxy) {
+					proxies[proxy] = true
+				}
 			}
 		}(url)
 	}
 	wg.Wait()
 
-	f, err := os.Create(inputFile)
-	if err != nil {
-		return
-	}
-	defer f.Close()
+	cacheMutex.Lock()
 	for proxy := range proxies {
-		f.WriteString(proxy + "\n")
+		cache = append(cache, proxy)
 	}
-
-	pc := &ProxyChecker{
-		InputFile:  inputFile,
-		OutputFile: outputFile,
-	}
-
-	start := time.Now()
-	pc.ProcessFile()
-	elapsed := time.Since(start)
-	fmt.Printf("Processed %d proxies in %s\n", pc.CountLines(), elapsed)
+	cacheMutex.Unlock()
 }
 
-// CountLines counts the number of lines in the input file
-func (pc *ProxyChecker) CountLines() int {
-	file, err := os.Open(pc.InputFile)
-	if err != nil {
-		fmt.Println(err)
-		return 0
+// GetGoodProxy returns a good proxy. If no cached proxies are available, it fetches and stores good proxies.
+func GetGoodProxy() string {
+	cacheMutex.Lock()
+	if len(cache) == 0 {
+		cacheMutex.Unlock()
+		FetchAndStoreGoodProxies()
+		cacheMutex.Lock()
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	count := 0
-	for scanner.Scan() {
-		count++
+	if len(cache) > 0 {
+		proxy := cache[0]
+		cache = cache[1:]
+		cacheMutex.Unlock()
+		return proxy
 	}
-	return count
+	cacheMutex.Unlock()
+	return ""
 }

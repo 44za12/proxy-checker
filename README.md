@@ -1,11 +1,48 @@
-# proxy-checker
+Alright, let's modify the README to reflect the updated function behavior.
 
-## Steps to run:
-- Clone this repository using:
-    `git clone https://github.com/44za12/proxy-checker.git`
-- Run:
-    - `cd proxy-checker`
-    - `go build -o proxychecker`
-    - `./proxychecker all.txt good.txt`
+---
 
-Running the above commands will generate two text files: `all.txt` and `good.txt` `all.txt` has all the proxies that were scraped and `good.txt` has the filtered _good_ proxies.
+# Proxy Checker
+
+A Go package for fetching and validating high-quality SOCKS5 proxies.
+
+## Installation
+
+To install the `proxy-checker` package, run:
+
+```bash
+go get github.com/44za12/proxy-checker
+```
+
+## Usage
+
+First, import the package in your Go code:
+
+```go
+import "github.com/44za12/proxy-checker"
+```
+
+### Fetch a Valid Proxy
+
+To fetch a valid SOCKS5 proxy:
+
+```go
+proxy := proxychecker.GetValidProxy()
+if proxy == "" {
+    fmt.Println("Failed to fetch a valid proxy.")
+    return
+}
+fmt.Println("Fetched Proxy:", proxy)
+```
+
+## How It Works
+
+Upon the first call to `GetValidProxy`:
+
+- The tool will scrape SOCKS5 proxies from predefined sources.
+- Validate each proxy for performance and reliability.
+- Store valid proxies in an in-memory cache for quick retrieval in subsequent calls.
+
+The in-memory cache ensures that the scraping and validation process is not executed repeatedly, offering a balance between speed and freshness of the proxies.
+
+---
