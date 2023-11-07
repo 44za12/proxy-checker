@@ -11,7 +11,7 @@ import (
 func NewProxyChecker() *ProxyChecker {
     return &ProxyChecker{
         Client: &http.Client{
-            Timeout: 10 * time.Second,
+            Timeout: 20 * time.Second,
         },
         Headers: headers,
         CheckLimit: 100,
@@ -81,5 +81,4 @@ func (pc *ProxyChecker) ScheduleRecheck(stopChan <-chan struct{}) {
 
 func init() {
     rand.Seed(time.Now().UnixNano())
-
 }

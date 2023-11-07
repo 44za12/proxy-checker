@@ -2,6 +2,7 @@ package proxychecker
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -13,7 +14,7 @@ func (pc *ProxyChecker) scrapeProxies(ctx context.Context) ([]Proxy, error) {
     var wg sync.WaitGroup
     var mu sync.Mutex
     var totalScraped []Proxy
-    var scrapeErrors []error
+    var scrapeErrors []string
 
     for _, url := range urls {
         wg.Add(1)
@@ -21,7 +22,7 @@ func (pc *ProxyChecker) scrapeProxies(ctx context.Context) ([]Proxy, error) {
             defer wg.Done()
             scraped, err := pc.scrapeProxy(ctx, u)
             if err != nil {
-                scrapeErrors = append(scrapeErrors, err)
+                scrapeErrors = append(scrapeErrors, u)
                 return
             }
             mu.Lock()
@@ -35,6 +36,9 @@ func (pc *ProxyChecker) scrapeProxies(ctx context.Context) ([]Proxy, error) {
     wg.Wait()
 
     if len(scrapeErrors) > 0 {
+		for _, value := range scrapeErrors {
+			fmt.Printf("URL: %s\n", value)
+		}
         println("Number of errors:", len(scrapeErrors))
     }
 

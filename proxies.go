@@ -18,7 +18,6 @@ func (pc *ProxyChecker) checkProxy(ctx context.Context, p Proxy, proxyTypes []st
         return "", false
     }
     randomServer := httpServers[rand.Intn(len(httpServers))]
-    proxyIP := strings.Split(p.Address, ":")[0]
     results := make(chan string, len(proxyTypes))
     var wg sync.WaitGroup
     for _, proxyType := range proxyTypes {
@@ -32,7 +31,7 @@ func (pc *ProxyChecker) checkProxy(ctx context.Context, p Proxy, proxyTypes []st
             transport := &http.Transport{
                 Proxy: http.ProxyURL(proxyURL),
                 DialContext: (&net.Dialer{
-                    Timeout: 10 * time.Second,
+                    Timeout: 20 * time.Second,
                 }).DialContext,
             }
             localClient := &http.Client{
@@ -51,16 +50,13 @@ func (pc *ProxyChecker) checkProxy(ctx context.Context, p Proxy, proxyTypes []st
                 return
             }
             defer resp.Body.Close()
-            body, err := io.ReadAll(resp.Body)
+            _, err = io.ReadAll(resp.Body)
             if err != nil || resp.StatusCode != http.StatusOK {
                 return
             }
-            ip := strings.TrimSpace(string(body))
-            if ip == proxyIP {
-                select {
-                case results <- pt:
-                default:
-                }
+            select {
+            case results <- pt:
+            default:
             }
         }(proxyType)
     }

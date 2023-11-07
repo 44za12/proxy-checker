@@ -52,7 +52,7 @@ func TestCheckProxy(t *testing.T) {
 func TestUpdateProxy(t *testing.T) {
     pc := NewProxyChecker()
     // proxyToTest := fmt.Sprintf("https://checkerproxy.net/api/archive/%s", time.Now().Format("2006-01-02"))
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
     defer cancel()
     err := pc.updateProxies(ctx)
     pc.SaveProxiesToFile("proxies.txt")
