@@ -2,161 +2,164 @@ package proxychecker
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 type Proxy struct {
-	Address string
-	Type    string
+    Address string
+    Type    string
 }
 
-type safeMap struct {
-	m   map[Proxy]bool
-	mux sync.Mutex
+type ProxyChecker struct {
+    Cache      []Proxy
+    CacheLock  sync.Mutex
+    Client     *http.Client
+    Headers    map[string]string
+    Proxies    sync.Map
 }
 
-func (sm *safeMap) set(key Proxy, value bool) {
-    sm.mux.Lock()
-    sm.m[key] = value
-    sm.mux.Unlock()
-}
-
-func (sm *safeMap) getAllKeys() []Proxy {
-    sm.mux.Lock()
-    defer sm.mux.Unlock()
-    keys := make([]Proxy, 0, len(sm.m))
-    for k := range sm.m {
-        keys = append(keys, k)
+func NewProxyChecker() *ProxyChecker {
+    headers := map[string]string{
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     }
-    return keys
+    return &ProxyChecker{
+        Client: &http.Client{
+            Timeout: 10 * time.Second,
+        },
+        Headers: headers,
+    }
 }
 
-var cache = make([]Proxy, 0)
-var cacheMutex sync.Mutex
-
-var httpServers = []string{
-    "https://www.google.com",
-    "https://www.cloudflare.com/cdn-cgi/trace",
+func (pc *ProxyChecker) makeRequest(ctx context.Context, url string) (*http.Response, error) {
+    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+    if err != nil {
+        return nil, err
+    }
+    for key, value := range pc.Headers {
+        req.Header.Set(key, value)
+    }
+    return pc.Client.Do(req)
 }
 
-func inferProxyTypeFromURL(proxyURL string) string {
-	proxyURL = strings.ToLower(proxyURL)
-	if strings.Contains(proxyURL, "socks5") || strings.Contains(proxyURL, "socks-5") {
-		return "SOCKS5"
-	} else if strings.Contains(proxyURL, "socks4") || strings.Contains(proxyURL, "socks-4") {
-		return "SOCKS4"
-	} else if strings.Contains(proxyURL, "https") {
-		return "HTTPS"
-	}
-	return "HTTP"
-}
-
-func RecheckGoodProxies(interval time.Duration) {
+func (pc *ProxyChecker) RecheckGoodProxies(ctx context.Context, interval time.Duration) {
     ticker := time.NewTicker(interval)
+    defer ticker.Stop()
     for {
-        <-ticker.C
-        cacheMutex.Lock()
-        validProxies := []Proxy{} // Changed to []Proxy
-        for _, proxy := range cache {
-            if CheckProxy(proxy) {
-                validProxies = append(validProxies, proxy)
-            }
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            pc.CheckAndUpdateProxies(ctx)
         }
-        if len(validProxies) == 0 {
-            cacheMutex.Unlock()
-            FetchAndStoreGoodProxies()
-            continue
-        }
-        cache = validProxies
-        cacheMutex.Unlock()
     }
 }
 
-func CheckProxy(p Proxy) bool {
-    var proxyURL *url.URL
-	var err error
+func (pc *ProxyChecker) CheckAndUpdateProxies(ctx context.Context) {
+    pc.CacheLock.Lock()
+    defer pc.CacheLock.Unlock()
+    
+    validProxies := make([]Proxy, 0)
+    proxyTypes := []string{"HTTP", "SOCKS4", "SOCKS5"}
+    
+    for _, proxy := range pc.Cache {
+        if proxyType, valid := pc.CheckProxy(ctx, proxy, proxyTypes); valid {
+            validProxies = append(validProxies, Proxy{Address: proxy.Address, Type: proxyType})
+        }
+    }
+    
+    pc.Cache = validProxies
 
-	switch p.Type {
-	case "HTTP":
-		proxyURL, err = url.Parse("http://" + p.Address)
-	case "HTTPS":
-		proxyURL, err = url.Parse("http://" + p.Address)
-	case "SOCKS4":
-		proxyURL, err = url.Parse("socks4://" + p.Address)
-	case "SOCKS5":
-		proxyURL, err = url.Parse("socks5://" + p.Address)
-	default:
-		return false
+    if len(validProxies) == 0 {
+        pc.FetchAndStoreGoodProxies(ctx)
+    }
+}
+
+func (pc *ProxyChecker) CheckProxy(ctx context.Context, p Proxy, proxyTypes []string) (string, bool) {
+    httpServers := []string{
+        "https://httpbin.org/ip",
+        "https://icanhazip.com",
+        "https://ifconfig.me/ip",
+        "https://api.ipify.org",
+        "https://ipinfo.io/ip",
+        "https://ip.42.pl/raw",
+        "https://checkip.amazonaws.com",
+        "https://wtfismyip.com/text",
+        "https://curlmyip.net",
+        "https://ipapi.co/ip",
+        "https://ipecho.net/plain",
+        "https://ip.tyk.nu",
+        "https://www.cloudflare.com/cdn-cgi/trace",
+        "https://www.google.com",
+        "https://www.youtube.com",
+        "https://www.facebook.com",
+        "https://www.amazon.com",
+        "https://www.instagram.com",
+        "https://www.whatsapp.com",
+        "https://www.linkedin.com",
+        "https://www.bing.com",
+        "https://aws.amazon.com/",
+        "https://www.x.com",
+        "https://www.alibaba.com",
+        "https://www.apple.com",
 	}
 
-	if err != nil {
-		return false
-	}
+    results := make(chan string, len(proxyTypes))
 
-	tr := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
-		DialContext: (&net.Dialer{
-			Timeout: 5 * time.Second,
-		}).DialContext,
-	}
-
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-
-    resultChan := make(chan bool, len(httpServers))
-
-    for _, server := range httpServers {
-        go func(server string) {
-            req, err := http.NewRequestWithContext(ctx, "GET", server, nil)
+    for _, proxyType := range proxyTypes {
+        go func(pt string) {
+            proxyURL, err := url.Parse(fmt.Sprintf("%s://%s", strings.ToLower(pt), p.Address))
             if err != nil {
-                resultChan <- false
+                results <- ""
                 return
             }
-            resp, err := tr.RoundTrip(req)
+            randomServer := httpServers[rand.Intn(len(httpServers))]
+            tr := &http.Transport{
+                Proxy: http.ProxyURL(proxyURL),
+                DialContext: (&net.Dialer{
+                    Timeout: 5 * time.Second,
+                }).DialContext,
+            }
+            pc.Client.Transport = tr
+            req, err := http.NewRequestWithContext(ctx, "GET", randomServer, nil)
             if err != nil {
-                resultChan <- false
+                results <- ""
                 return
             }
-            defer resp.Body.Close()
-            if resp.StatusCode == http.StatusOK {
-                resultChan <- true
-            } else {
-                resultChan <- false
+            _, err = pc.Client.Do(req)
+            if err != nil {
+                results <- ""
+                return
             }
-        }(server)
+            results <- pt
+        }(proxyType)
     }
 
-    for i := 0; i < len(httpServers); i++ {
-        if <-resultChan {
-            return true
+    for i := 0; i < len(proxyTypes); i++ {
+        result := <-results
+        if result != "" {
+            pc.Proxies.Store(Proxy{Address: p.Address, Type: result}, true)
+            return result, true
         }
     }
-    return false
+
+    return "", false
 }
 
-func scrapeProxies(url string) []string {
-	pattern := regexp.MustCompile(`\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b:\d{2,5}`)
-	resp, err := http.Get(url)
-	if err != nil {
-		return []string{}
-	}
-	defer resp.Body.Close()
-	html, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return []string{}
-	}
-	return pattern.FindAllString(string(html), -1)
-}
 
-func FetchAndStoreGoodProxies() {
-	urls := []string{
+func (pc *ProxyChecker) FetchAndStoreGoodProxies(ctx context.Context) {
+    urls := []string{
 		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
 		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
 		"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
@@ -176,90 +179,139 @@ func FetchAndStoreGoodProxies() {
 		"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies.txt",
 		"https://raw.githubusercontent.com/a2u/free-proxy-list/master/free-proxy-list.txt",
 		"https://api.proxyscrape.com/proxytable.php?nf=true&country=all",
+		"https://hidemy.io/en/proxy-list/",
+		"https://www.proxy-list.download/HTTP",
+		"https://www.proxy-list.download/HTTPS",
+		"https://www.proxy-list.download/SOCKS4",
+		"https://www.proxy-list.download/SOCKS5",
 		"https://free-proxy-list.net/",
+		"https://www.sslproxies.org/",
+		"http://www.us-proxy.org/",
+		"https://www.proxynova.com/proxy-server-list/",
+		"https://proxy-list.org/english/index.php",
+		"https://hidemy.name/en/proxy-list/",
+		"http://proxydb.net/",
+		"https://multiproxy.org/txt_all/proxy.txt",
 		"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt",
 	}
 
-	var wg sync.WaitGroup
-	proxies := &safeMap{m: make(map[Proxy]bool)}
+    var wg sync.WaitGroup
 
-	proxyChannel := make(chan Proxy, 500) // Buffered channel
+    for _, ep := range urls {
+        wg.Add(1)
+        go func(u string) {
+            defer wg.Done()
+            scrapedProxies, err := pc.scrapeProxies(ctx, u)
+            if err != nil {
+                fmt.Println("Error scraping proxies:", err)
+                return
+            }
+            for _, proxy := range scrapedProxies {
+                _, err := url.Parse(fmt.Sprintf("http://%s", proxy.Address))
+                if err == nil {
+                    pc.Proxies.Store(Proxy{Address: proxy.Address, Type: "HTTP"}, false)
+                }
+            }
+        }(ep)
+    }
 
-	for _, url := range urls {
-		wg.Add(1)
-		go func(url string) {
-			defer wg.Done()
-			for _, proxy := range scrapeProxies(url) {
-				proxyType := inferProxyTypeFromURL(url)
-				proxyStruct := Proxy{Address: proxy, Type: proxyType}
-				proxyChannel <- proxyStruct
-			}
-		}(url)
-	}
+    wg.Wait()
 
-	// Close the proxyChannel after all proxies have been sent
-	go func() {
-		wg.Wait()
-		close(proxyChannel)
-	}()
+    pc.CacheLock.Lock()
+    pc.Proxies.Range(func(key, value interface{}) bool {
+        pc.Cache = append(pc.Cache, key.(Proxy))
+        return true
+    })
+    pc.CacheLock.Unlock()
+}
 
-	// Use multiple workers to check proxies concurrently
-	workerCount := 500
-	var workerWg sync.WaitGroup
+func (pc *ProxyChecker) scrapeProxies(ctx context.Context, url string) ([]Proxy, error) {
+    resp, err := pc.makeRequest(ctx, url)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
 
-	for i := 0; i < workerCount; i++ {
-		workerWg.Add(1)
-		go func() {
-			defer workerWg.Done()
-			for proxy := range proxyChannel {
-				if CheckProxy(proxy) {
-					proxies.set(proxy, true)
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
+
+    html := string(body)
+    doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+    if err != nil {
+        return nil, err
+    }
+
+    return pc.scrapeProxiesFromHTML(doc), nil
+}
+
+func (pc *ProxyChecker) scrapeProxiesFromHTML(doc *goquery.Document) []Proxy {
+    var proxies []Proxy
+	doc.Find("table").Each(func(_ int, tablehtml *goquery.Selection) {
+		headers := []string{}
+		tablehtml.Find("tr").Each(func(rowIndex int, rowhtml *goquery.Selection) {
+			row := []string{}
+			rowhtml.Find("th, td").Each(func(_ int, cellhtml *goquery.Selection) {
+				text := strings.TrimSpace(cellhtml.Text())
+				if rowIndex == 0 {
+					headers = append(headers, text)
+				} else {
+					row = append(row, text)
+				}
+			})
+
+			if rowIndex > 0 {
+				proxy := Proxy{}
+				for i, cell := range row {
+					header := strings.ToLower(headers[i])
+					if strings.Contains(header, "ip") || strings.Contains(header, "address") {
+						proxy.Address = cell
+					} else if strings.Contains(header, "port") {
+						proxy.Address += ":" + cell
+					}
+				}
+				if proxy.Address != "" {
+					proxies = append(proxies, proxy)
 				}
 			}
-		}()
-	}
+		})
+	})
 
-	workerWg.Wait()
-
-	cacheMutex.Lock()
-	cache = append(cache, proxies.getAllKeys()...)
-	cacheMutex.Unlock()
+	return proxies
 }
 
-// GetGoodProxy returns a good proxy. If no cached proxies are available, it fetches and stores good proxies.
-func GetGoodProxy() Proxy {
-	cacheMutex.Lock()
-	if len(cache) == 0 {
-		cacheMutex.Unlock()
-		FetchAndStoreGoodProxies()
-		cacheMutex.Lock()
-	}
-	if len(cache) > 0 {
-		proxy := cache[0]
-		cache = cache[1:]
-		cache = append(cache, proxy)
-		cacheMutex.Unlock()
-		return proxy
-	}
-	cacheMutex.Unlock()
-	return Proxy{}
+func (pc *ProxyChecker) GetGoodProxy() Proxy {
+    pc.CacheLock.Lock()
+    defer pc.CacheLock.Unlock()
+    if len(pc.Cache) > 0 {
+        proxy := pc.Cache[0]
+        pc.Cache = pc.Cache[1:]
+        schema := ""
+        switch proxy.Type {
+        case "HTTP":
+            schema = "http://"
+        case "SOCKS4":
+            schema = "socks4://"
+        case "SOCKS5":
+            schema = "socks5://"
+        default:
+            schema = "http://"
+        }
+        pc.Proxies.Store(Proxy{Address: schema + proxy.Address, Type: proxy.Type}, true)
+        return Proxy{Address: schema + proxy.Address, Type: proxy.Type}
+    }
+    return Proxy{}
 }
 
-func GetAllProxies() []Proxy {
-	cacheMutex.Lock()
-	if len(cache) == 0 {
-		cacheMutex.Unlock()
-		FetchAndStoreGoodProxies()
-		cacheMutex.Lock()
-	}
-	if len(cache) > 0 {
-		cacheMutex.Unlock()
-		return cache
-	}
-	cacheMutex.Unlock()
-	return []Proxy{}
+func (pc *ProxyChecker) GetAllProxies() []Proxy {
+    pc.CacheLock.Lock()
+    defer pc.CacheLock.Unlock()
+
+    return pc.Cache
 }
+
 
 func init() {
-    go RecheckGoodProxies(10 * time.Minute)
+    rand.Seed(time.Now().UnixNano())
 }

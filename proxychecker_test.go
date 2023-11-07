@@ -1,16 +1,21 @@
 package proxychecker
 
 import (
-	"fmt"
+	"context"
 	"testing"
 )
 
 func TestGetGoodProxies(t *testing.T) {
-    proxies := GetAllProxies()
+    pc := NewProxyChecker()
+    ctx := context.TODO()
+    pc.FetchAndStoreGoodProxies(ctx)
+
+    proxies := pc.GetAllProxies()
     if len(proxies) < 1 {
-        t.Fatal("No good proxy found")
+        t.Fatal("No good proxies found")
     }
-	proxy := GetGoodProxy()
-	fmt.Printf("Example proxy: %s\n\n", proxy)
-    fmt.Printf("%d good proxies found:", len(proxies))
+    proxy := pc.GetGoodProxy()
+    t.Logf("Example proxy with schema: %s", proxy.Address)
+    t.Logf("%d good proxies found", len(proxies))
 }
+
